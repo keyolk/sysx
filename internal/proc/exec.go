@@ -64,7 +64,9 @@ type psFill struct {
 // readPS fills RSS and CPU time for processes libproc refused. /bin/ps is
 // setuid root, so it sees them.
 func readPS(ctx context.Context, pids []int) (map[int]psFill, error) {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	// Generous: the background recorder runs at low priority on a loaded
+	// machine, and root daemons' CPU is only visible through ps.
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	ids := make([]string, len(pids))
 	for i, p := range pids {

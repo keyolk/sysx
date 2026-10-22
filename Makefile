@@ -12,6 +12,8 @@ run: build
 install: build
 	rm -f ~/.local/bin/sysx
 	cp $(BIN) ~/.local/bin/sysx
+	@# A running recorder keeps the old binary until restarted.
+	@launchctl kickstart -k gui/$$(id -u)/io.github.keyolk.sysx.record 2>/dev/null && echo "restarted the recorder" || true
 
 clean:
 	rm -rf bin/

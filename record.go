@@ -74,6 +74,9 @@ func runRecord(args []string) error {
 		if err != nil {
 			logger.Printf("sample: %v", err)
 		} else {
+			for _, w := range snap.Warnings {
+				logger.Printf("sample warning: %s", w)
+			}
 			if err := store.Append(rec.Step(snap)); err != nil {
 				logger.Printf("append: %v", err)
 			}

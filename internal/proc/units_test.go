@@ -15,8 +15,10 @@ func TestChildCPUIsCreditedAfterReapInNanoseconds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// A child that burns ~300ms of CPU, then exits and is reaped by Wait.
-	cmd := exec.Command("/bin/sh", "-c", `i=0; end=$(( $(date +%s) + 1 )); while [ $(date +%s) -lt $end ]; do i=$((i+1)); done`)
+	// A child that burns a fixed amount of work, then exits and is reaped
+	// by Wait. A count, not a clock: a deadline loop started near the end
+	// of a second barely runs.
+	cmd := exec.Command("/bin/sh", "-c", `i=0; while [ $i -lt 300000 ]; do i=$((i+1)); done`)
 	if err := cmd.Run(); err != nil {
 		t.Fatal(err)
 	}
@@ -25,8 +27,8 @@ func TestChildCPUIsCreditedAfterReapInNanoseconds(t *testing.T) {
 		t.Fatal(err)
 	}
 	child := time.Duration(after.childCPUNs - before.childCPUNs)
-	if child < 100*time.Millisecond || child > 5*time.Second {
-		t.Errorf("child cpu credited = %v, want ~0.3-1.5s", child)
+	if child < 50*time.Millisecond || child > 30*time.Second {
+		t.Errorf("child cpu credited = %v, want the loop's CPU (0.05-30s)", child)
 	}
 	rt, _ := readTask(os.Getpid())
 	own := time.Duration(after.cpuNs)

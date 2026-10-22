@@ -10,6 +10,10 @@ import (
 )
 
 type counters struct {
+	// hasCPU: this sample read the CPU time. A process libproc refuses
+	// gets it from ps; when ps fails or times out it has none, and a rate
+	// against a zero would charge its whole lifetime to one interval.
+	hasCPU  bool
 	cpuNs   uint64
 	childNs uint64
 	diskR   uint64
@@ -95,7 +99,7 @@ func (c *Collector) Sample(ctx context.Context) (Snapshot, error) {
 		}
 		var cn counters
 		if rt.full {
-			cn.cpuNs = rt.cpuNs
+			cn.cpuNs, cn.hasCPU = rt.cpuNs, true
 			if u, err := readUsage(pid); err == nil {
 				cn.diskR, cn.diskW, cn.hasDisk = u.diskRead, u.diskWrite, true
 				cn.childNs = u.childCPUNs
@@ -122,7 +126,7 @@ func (c *Collector) Sample(ctx context.Context) (Snapshot, error) {
 				if f, ok := fill[procs[i].PID]; ok && procs[i].Partial {
 					procs[i].RSS, procs[i].Footprint, procs[i].CPUTime = f.rss, f.rss, f.cpu
 					cn := next[procs[i].Key()]
-					cn.cpuNs = uint64(f.cpu)
+					cn.cpuNs, cn.hasCPU = uint64(f.cpu), true
 					next[procs[i].Key()] = cn
 				}
 			}
@@ -148,8 +152,18 @@ func (c *Collector) Sample(ctx context.Context) (Snapshot, error) {
 		if !seen || secs <= 0 {
 			continue
 		}
-		p.CPU = rate(cn.cpuNs, old.cpuNs, secs) / 1e9 * 100
-		p.ChildCPU = rate(cn.childNs, old.childNs, secs) / 1e9 * 100
+		if cn.hasCPU && old.hasCPU {
+			p.CPU = rate(cn.cpuNs, old.cpuNs, secs) / 1e9 * 100
+		}
+		if cn.hasDisk && old.hasDisk {
+			p.ChildCPU = rate(cn.childNs, old.childNs, secs) / 1e9 * 100
+		}
+		// More than every core for the whole interval cannot happen; a
+		// counter read wrong (or a pid table race) produced it.
+		if ceiling := float64(c.ncpu) * 100 * 1.05; p.CPU > ceiling || p.ChildCPU > ceiling*4 {
+			snap.Warnings = append(snap.Warnings, fmt.Sprintf("pid %d %s: impossible CPU %.0f%% (children %.0f%%) dropped", p.PID, p.Name, p.CPU, p.ChildCPU))
+			p.CPU, p.ChildCPU = 0, 0
+		}
 		if cn.hasDisk && old.hasDisk {
 			p.DiskRead = rate(cn.diskR, old.diskR, secs)
 			p.DiskWrite = rate(cn.diskW, old.diskW, secs)
