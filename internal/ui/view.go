@@ -77,6 +77,9 @@ func (m Model) View() string {
 
 	fs := m.th.FooterStyle()
 	right := fmt.Sprintf("%d/%d", m.rows.Index()+1, m.rows.Len())
+	if m.past.on {
+		right = fmt.Sprintf("%d/%d", m.past.rows.Index()+1, m.past.rows.Len())
+	}
 	if m.paused {
 		right = "paused " + right
 	}
@@ -220,7 +223,12 @@ func (m Model) columns(w int) (cols []column, nameW int) {
 	return nil, w
 }
 
+func inputStyle(m Model) input.Style { return input.Style{Placeholder: m.th.Subtle} }
+
 func (m Model) viewList(g geom) string {
+	if m.past.on {
+		return m.viewHistory(g)
+	}
 	w := g.list.W
 	cols, nameW := m.columns(w)
 	head := "  " + render.Pad("NAME", nameW)

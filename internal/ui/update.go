@@ -27,7 +27,13 @@ func (m Model) update(msg tea.Msg) (Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.w, m.h = msg.Width, msg.Height
-		m.rows = m.rows.SetHeight(m.geometry().listRows)
+		m = m.resizeLists()
+	case histKickMsg:
+		return m.loadHistory()
+	case histLoadedMsg:
+		m = m.applyHistory(msg)
+		m.toasts = toast.Dismiss(m.toasts, "history")
+		return m.resizeLists(), nil
 	case toast.Expired:
 		m.toasts = toast.Update(m.toasts, msg)
 	case prefs.SaveTick:
@@ -42,10 +48,15 @@ func (m Model) update(msg tea.Msg) (Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 	case tickMsg:
-		if m.paused {
-			return m, nil
+		var load tea.Cmd
+		if !m.past.loading && time.Since(m.past.loaded) >= histReload {
+			m, load = m.loadHistory()
 		}
-		return m.startSample()
+		if m.paused {
+			return m, load
+		}
+		m, cmd := m.startSample()
+		return m, tea.Batch(cmd, load)
 	case sampledMsg:
 		m.sampling = m.sampling.Done(msg.id)
 		next := m.nextTick()
@@ -58,7 +69,7 @@ func (m Model) update(msg tea.Msg) (Model, tea.Cmd) {
 			m.logf("sample warning: %s", w)
 		}
 		m = m.applySample(msg.snap)
-		m.rows = m.rows.SetHeight(m.geometry().listRows)
+		m = m.resizeLists()
 		m, cmd := m.requestExtra(false)
 		return m, tea.Batch(next, cmd)
 	case extraStartMsg:
@@ -131,6 +142,7 @@ func (m Model) typeFilter(k tea.KeyMsg) (Model, tea.Cmd) {
 func (m Model) applyQuery(q string) (Model, tea.Cmd) {
 	m.query = q
 	m.rows = m.rows.SetItems(m.visible())
+	m.past.rows = m.past.rows.SetItems(m.histVisible())
 	return m.requestExtra(false)
 }
 
@@ -144,6 +156,9 @@ func (m Model) relist() (Model, tea.Cmd) {
 }
 
 func (m Model) run(b keys.Binding, k tea.KeyMsg) (Model, tea.Cmd) {
+	if mm, cmd, ok := m.runHistory(b.Action); ok {
+		return mm.resizeLists(), cmd
+	}
 	g := m.geometry()
 	prevSel := m.rows.SelectedID()
 	var cmd tea.Cmd
@@ -282,8 +297,7 @@ func (m Model) run(b keys.Binding, k tea.KeyMsg) (Model, tea.Cmd) {
 		if res.Changed {
 			m.saver, cmd = m.saver.Save(m.uiState())
 		}
-		m.rows = m.rows.SetHeight(m.geometry().listRows)
-		return m, cmd
+		return m.resizeLists(), cmd
 	}
 	if m.rows.SelectedID() != prevSel {
 		m.moved = true
@@ -307,9 +321,12 @@ func (m Model) mouse(msg tea.MouseMsg) (Model, tea.Cmd) {
 		var cmd tea.Cmd
 		if res.Changed {
 			m.saver, cmd = m.saver.Save(m.uiState())
-			m.rows = m.rows.SetHeight(m.geometry().listRows)
+			m = m.resizeLists()
 		}
 		return m, cmd
+	}
+	if m.past.on {
+		return m.mouseHistory(msg, g), nil
 	}
 	prevSel := m.rows.SelectedID()
 	switch {
@@ -349,4 +366,43 @@ func (m Model) mouse(msg tea.MouseMsg) (Model, tea.Cmd) {
 func (m Model) clampDetail(off int, g geom) int {
 	n := len(m.detailLines(g.detail.W))
 	return max(0, min(off, n-g.detail.H))
+}
+
+// resizeLists gives both lists the rows the layout leaves them; the history
+// list has a title row above its column header.
+func (m Model) resizeLists() Model {
+	g := m.geometry()
+	m.rows = m.rows.SetHeight(g.listRows)
+	m.past.rows = m.past.rows.SetHeight(max(g.listRows-1, 1))
+	return m
+}
+
+func (m Model) mouseHistory(msg tea.MouseMsg, g geom) Model {
+	switch {
+	case g.detail.Contains(msg.X, msg.Y):
+		if d := mouse.Delta(msg); d != 0 {
+			m.detailOff = m.clampDetail(m.detailOff+d, g)
+		} else if mouse.IsLeftPress(msg) {
+			m.focusDetail = true
+		}
+	case g.listBody.Contains(msg.X, msg.Y):
+		prev := m.past.rows.SelectedID()
+		if l, ok := mouse.MoveByWheel(m.past.rows, msg); ok {
+			m.past.rows = l
+		} else if mouse.IsLeftPress(msg) {
+			_, body := g.listBody.SplitTop(1) // the title row
+			hit := mouse.ListHit(m.past.rows, body, msg)
+			if hit.HasItem {
+				id := m.past.rows.At(hit.Index).ID()
+				var double bool
+				m.clicks, double = m.clicks.Press(id, time.Now())
+				m.past.rows = m.past.rows.SelectIndex(hit.Index)
+				m.focusDetail = double && id == prev
+			}
+		}
+		if m.past.rows.SelectedID() != prev {
+			m.detailOff = 0
+		}
+	}
+	return m
 }

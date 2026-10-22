@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"strings"
+
 	"github.com/keyolk/tuikit/keys"
 	"github.com/keyolk/tuikit/split"
 )
@@ -12,6 +14,7 @@ const (
 	ctxFilter  keys.Ctx = "filter"
 	ctxConfirm keys.Ctx = "confirm"
 	ctxHelp    keys.Ctx = "help"
+	ctxHistory keys.Ctx = "history"
 )
 
 // Stacks are every context stack the app can be in, innermost first.
@@ -21,6 +24,8 @@ var Stacks = [][]keys.Ctx{
 	{ctxFilter, ctxGlobal},
 	{ctxConfirm, ctxGlobal},
 	{ctxHelp, ctxGlobal},
+	{ctxHistory, ctxGlobal},
+	{ctxDetail, ctxHistory, ctxGlobal},
 }
 
 var tabKeys = []string{"1", "2", "3", "4"}
@@ -93,6 +98,25 @@ func Keymap() keys.Keymap {
 		{Action: "help.up", Keys: []string{"k", "up"}, Ctx: ctxHelp, Group: "Move", Section: "help.move",
 			Help: "scroll up", Footer: 2, FooterGroup: "scroll"},
 	}
+	// The history view moves, filters, sorts and focuses with the list's
+	// own actions, so the detail pane's shadows and the handlers serve both.
+	for _, b := range bs {
+		if b.Ctx == ctxList && (strings.HasPrefix(b.Action, "list.") && b.Action != "list.parent" &&
+			b.Action != "list.flagged" && b.Action != "list.mine") {
+			b.Ctx = ctxHistory
+			bs = append(bs, b)
+		}
+	}
+	bs = append(bs,
+		keys.Binding{Action: "view.history", Keys: []string{"H", "f2"}, Ctx: ctxList, Group: "View",
+			Help: "history of past heavy processes", Short: "history", Footer: 7},
+		keys.Binding{Action: "view.live", Keys: []string{"H", "f2", "esc"}, Ctx: ctxHistory, Group: "View",
+			Help: "back to live processes", Short: "live", Footer: 1},
+		keys.Binding{Action: "history.window", Keys: []string{"w"}, Ctx: ctxHistory, Group: "View",
+			Help: "cycle time window", Short: "window", Footer: 6},
+	)
 	bs = append(bs, split.BindingsWith(ctxList, "View", 0)...)
+	hs := split.BindingsWith(ctxHistory, "View", 0)
+	bs = append(bs, hs...)
 	return keys.New(bs...)
 }

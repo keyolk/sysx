@@ -11,6 +11,7 @@ import (
 
 	"github.com/keyolk/tuikit/render"
 
+	"github.com/keyolk/sysx/internal/history"
 	"github.com/keyolk/sysx/internal/outlier"
 	"github.com/keyolk/sysx/internal/proc"
 )
@@ -20,7 +21,13 @@ var tabNames = []string{"overview", "args+env", "files+net", "tree"}
 func (m Model) viewDetail(g geom) string {
 	w := g.detail.W
 	var bar []string
+	if m.past.on {
+		bar = append(bar, m.th.Selected.Render(" episode "))
+	}
 	for i, n := range tabNames {
+		if m.past.on {
+			break
+		}
 		label := fmt.Sprintf("%d %s", i+1, n)
 		if i == m.tab {
 			bar = append(bar, m.th.Selected.Render(" "+label+" "))
@@ -41,6 +48,13 @@ func (m Model) viewDetail(g geom) string {
 // detailLines is the whole scrollable body of the current tab, already cut
 // to w cells per line.
 func (m Model) detailLines(w int) []string {
+	if m.past.on {
+		lines := m.episodeLines(w)
+		for i := range lines {
+			lines[i] = render.Truncate(lines[i], w)
+		}
+		return lines
+	}
 	r, ok := m.selected()
 	if !ok || w <= 0 {
 		return []string{m.th.Subtle.Render("no process selected")}
@@ -175,6 +189,13 @@ func (m Model) overview(r row, w int) []string {
 		line("disk", m.hist.Series(key, outlier.Disk), 0, rateStr(p.DiskRead+p.DiskWrite)),
 		line("net", m.hist.Series(key, outlier.Net), 0, rateStr(p.NetIn+p.NetOut)),
 	)
+
+	if n, cpu, busy, last := m.pastOf(p.User, p.Name); n > 0 {
+		lines = append(lines, "", m.section("past day"))
+		lines = append(lines, kv("", fmt.Sprintf("heavy %d times, busy %s, %s of CPU", n, history.Dur(busy),
+			history.Dur(time.Duration(cpu*float64(time.Second)))))+
+			m.th.Muted.Render("  last "+last.Local().Format("15:04")+" · H shows them"))
+	}
 
 	lines = append(lines, "", m.section("family"))
 	lines = append(lines, wrap(m.th.Muted.Render("from  ")+m.lineage(p), w, "      ")...)

@@ -154,6 +154,8 @@ type rawUsage struct {
 	diskRead, diskWrite uint64
 	footprint           uint64
 	start               uint64 // mach absolute time; disambiguates pid reuse
+	cpuNs               uint64
+	childCPUNs          uint64 // children that exited and were reaped
 }
 
 func readUsage(pid int) (rawUsage, error) {
@@ -164,6 +166,10 @@ func readUsage(pid int) (rawUsage, error) {
 	return rawUsage{
 		diskRead: uint64(ri.ri_diskio_bytesread), diskWrite: uint64(ri.ri_diskio_byteswritten),
 		footprint: uint64(ri.ri_phys_footprint), start: uint64(ri.ri_proc_start_abstime),
+		// rusage_info times are mach absolute units like the task info,
+		// though the header calls them nanoseconds.
+		cpuNs:      machToNs(uint64(ri.ri_user_time) + uint64(ri.ri_system_time)),
+		childCPUNs: machToNs(uint64(ri.ri_child_user_time) + uint64(ri.ri_child_system_time)),
 	}, nil
 }
 

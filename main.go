@@ -26,6 +26,29 @@ import (
 var version = "dev"
 
 func main() {
+	if len(os.Args) > 1 {
+		var err error
+		switch os.Args[1] {
+		case "record":
+			err = runRecord(os.Args[2:])
+		case "history":
+			err = runHistory(os.Args[2:])
+		default:
+			goto tui
+		}
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "sysx:", err)
+			os.Exit(1)
+		}
+		return
+	}
+tui:
+	flag.Usage = func() {
+		fmt.Fprintf(os.Stderr, "usage: sysx [-i 2s]          the monitor\n"+
+			"       sysx record [--install|--uninstall] [-i 10s] [-keep 7] [-max-mb 64]\n"+
+			"       sysx history [-since 24h] [-sort time|cpu|mem|disk|net] [-grep text] [-json]\n")
+		flag.PrintDefaults()
+	}
 	interval := flag.Duration("i", 2*time.Second, "sampling interval")
 	showVersion := flag.Bool("version", false, "print the version")
 	flag.Parse()
@@ -37,7 +60,7 @@ func main() {
 		*interval = 500 * time.Millisecond
 	}
 
-	logger, closeLog := openLog()
+	logger, closeLog := openLog("sysx.log")
 	defer closeLog()
 
 	saved, err := prefs.Load(ui.App, ui.UIState{})
@@ -61,8 +84,8 @@ func main() {
 	}
 }
 
-// openLog writes to $XDG_STATE_HOME/sysx/sysx.log; stdout is the screen.
-func openLog() (*log.Logger, func()) {
+// openLog writes to $XDG_STATE_HOME/sysx/<name>; stdout is the screen.
+func openLog(name string) (*log.Logger, func()) {
 	dir := os.Getenv("XDG_STATE_HOME")
 	if dir == "" {
 		home, _ := os.UserHomeDir()
@@ -70,7 +93,7 @@ func openLog() (*log.Logger, func()) {
 	}
 	dir = filepath.Join(dir, ui.App)
 	if err := os.MkdirAll(dir, 0o700); err == nil {
-		if f, err := os.OpenFile(filepath.Join(dir, "sysx.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600); err == nil {
+		if f, err := os.OpenFile(filepath.Join(dir, name), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600); err == nil {
 			return log.New(f, "", log.LstdFlags), func() { f.Close() }
 		}
 	}

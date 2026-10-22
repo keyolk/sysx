@@ -23,6 +23,7 @@ import (
 	"github.com/keyolk/tuikit/theme"
 	"github.com/keyolk/tuikit/toast"
 
+	"github.com/keyolk/sysx/internal/history"
 	"github.com/keyolk/sysx/internal/outlier"
 	"github.com/keyolk/sysx/internal/proc"
 )
@@ -48,6 +49,9 @@ type UIState struct {
 	Mine    bool        `json:"mine"`
 	Tab     int         `json:"tab"`
 	Split   split.State `json:"split"`
+	// HistWindow and HistSort are the history view's; 0 is a default.
+	HistWindow string `json:"hist_window,omitempty"`
+	HistSort   string `json:"hist_sort,omitempty"`
 }
 
 type (
@@ -129,6 +133,9 @@ type Model struct {
 	help    bool
 	helpOff int
 
+	past    histState // the history view and the loaded log
+	histDir string
+
 	split  split.Model
 	clicks mouse.Clicks
 	w, h   int
@@ -145,6 +152,8 @@ func New(km keys.Keymap, th theme.Theme, logf func(string, ...any), saved UIStat
 		thr:      outlier.Defaults(),
 		hist:     outlier.NewHistory(historyKeep),
 		me:       os.Getuid(),
+		histDir:  history.DefaultDir(),
+		past:     histState{window: defaultHistWindow},
 		sortBy:   parseSort(saved.Sort),
 		flagged:  saved.Flagged,
 		mine:     saved.Mine,
@@ -157,18 +166,29 @@ func New(km keys.Keymap, th theme.Theme, logf func(string, ...any), saved UIStat
 		},
 	}
 	m.split, _ = m.split.Restore(saved.Split)
+	if i := slices.Index(histWindowNames, saved.HistWindow); i >= 0 {
+		m.past.window = i
+	}
+	if i := slices.Index(history.SortKeys, saved.HistSort); i >= 0 {
+		m.past.sortBy = i
+	}
 	return m
 }
 
 func (m Model) uiState() UIState {
-	return UIState{Sort: m.sortBy.String(), Flagged: m.flagged, Mine: m.mine, Tab: m.tab, Split: m.split.State()}
+	return UIState{Sort: m.sortBy.String(), Flagged: m.flagged, Mine: m.mine, Tab: m.tab, Split: m.split.State(),
+		HistWindow: histWindowNames[m.past.window], HistSort: history.SortKeys[m.past.sortBy]}
 }
 
 // Init takes the first sample right away; it has no rates, so the second
 // follows after a short beat instead of a full interval.
 func (m Model) Init() tea.Cmd {
-	return func() tea.Msg { return tickMsg{} }
+	return tea.Batch(func() tea.Msg { return tickMsg{} }, func() tea.Msg { return histKickMsg{} })
 }
+
+// histKickMsg asks Update for the first history load; Init cannot bump
+// the load generation on the model it returns nothing for.
+type histKickMsg struct{}
 
 func (m Model) sampleCmd(id uint64) tea.Cmd {
 	c := m.coll
@@ -266,6 +286,10 @@ func (m Model) active() []keys.Ctx {
 		return Stacks[3]
 	case m.filtering:
 		return Stacks[2]
+	case m.past.on && m.focusDetail:
+		return Stacks[6]
+	case m.past.on:
+		return Stacks[5]
 	case m.focusDetail:
 		return Stacks[1]
 	}
@@ -317,8 +341,12 @@ func (m Model) keyState(action string) string {
 
 func (m Model) liveLabel(action string) (string, bool) {
 	switch {
+	case action == "list.sort" && m.past.on:
+		return "sort:" + history.SortKeys[m.past.sortBy], true
 	case action == "list.sort":
 		return "sort:" + m.sortBy.String(), true
+	case action == "history.window":
+		return "window:" + history.Dur(histWindows[m.past.window]), true
 	case action == "list.filter" && m.query != "":
 		return "filter: " + m.query, true
 	}

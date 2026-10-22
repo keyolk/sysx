@@ -11,6 +11,7 @@ import (
 
 type counters struct {
 	cpuNs   uint64
+	childNs uint64
 	diskR   uint64
 	diskW   uint64
 	netIn   uint64
@@ -97,6 +98,8 @@ func (c *Collector) Sample(ctx context.Context) (Snapshot, error) {
 			cn.cpuNs = rt.cpuNs
 			if u, err := readUsage(pid); err == nil {
 				cn.diskR, cn.diskW, cn.hasDisk = u.diskRead, u.diskWrite, true
+				cn.childNs = u.childCPUNs
+				p.ChildCPUTime = time.Duration(u.childCPUNs)
 				p.Footprint = u.footprint
 				p.DiskTotal = u.diskRead + u.diskWrite
 			}
@@ -146,6 +149,7 @@ func (c *Collector) Sample(ctx context.Context) (Snapshot, error) {
 			continue
 		}
 		p.CPU = rate(cn.cpuNs, old.cpuNs, secs) / 1e9 * 100
+		p.ChildCPU = rate(cn.childNs, old.childNs, secs) / 1e9 * 100
 		if cn.hasDisk && old.hasDisk {
 			p.DiskRead = rate(cn.diskR, old.diskR, secs)
 			p.DiskWrite = rate(cn.diskW, old.diskW, secs)

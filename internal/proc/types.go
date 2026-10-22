@@ -45,12 +45,17 @@ type Proc struct {
 	State                State
 	Nice                 int
 
-	CPU       float64 // percent of one core over the last interval
-	CPUTime   time.Duration
-	RSS       uint64
-	Footprint uint64 // what Activity Monitor calls Memory; RSS when unreadable
-	VSZ       uint64
-	Threads   int
+	CPU     float64 // percent of one core over the last interval
+	CPUTime time.Duration
+	// ChildCPU is the CPU of children that exited and were reaped during
+	// the interval, in percent of one core: a build driver's compilers
+	// that came and went between two samples.
+	ChildCPU     float64
+	ChildCPUTime time.Duration
+	RSS          uint64
+	Footprint    uint64 // what Activity Monitor calls Memory; RSS when unreadable
+	VSZ          uint64
+	Threads      int
 
 	DiskRead, DiskWrite float64 // bytes per second
 	DiskTotal           uint64  // bytes read+written since start
