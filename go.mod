@@ -1,8 +1,8 @@
 module github.com/keyolk/sysx
 
-go 1.26.0
+go 1.25.1
 
-require golang.org/x/sys v0.49.0
+require golang.org/x/sys v0.36.0
 
 require (
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect

@@ -8,6 +8,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/keyolk/tuikit/chart"
 	"github.com/keyolk/tuikit/list"
 	"github.com/keyolk/tuikit/render"
 	"github.com/keyolk/tuikit/toast"
@@ -194,13 +195,14 @@ func (m Model) recorderLine() string {
 func (m Model) viewHistory(g geom) string {
 	w := g.list.W
 	h := m.past
-	whenW, forW, cpuW, pctW, memW, ioW := 11, 7, 8, 5, 6, 6
+	whenW, forW, cpuW, pctW, memW, ioW := 11, 6, 8, 5, 6, 6
 	fixed := 2 + whenW + 1 + forW + 1 + cpuW + 1 + pctW + 1 + pctW + 1 + memW + 1 + ioW + 1 + ioW + 1
-	nameW := max(w-fixed, 10)
-	showIO := w >= fixed+16
+	// Disk and net leave first, then the name shrinks to 10.
+	showIO := w >= fixed+14
 	if !showIO {
-		nameW = max(w-(fixed-2*(ioW+1)), 10)
+		fixed -= 2 * (ioW + 1)
 	}
+	nameW := max(w-fixed, 10)
 	head := "  " + render.Pad("WHEN", whenW) + " " + render.PadLeft("FOR", forW) + " " + render.Pad("NAME", nameW) + " " +
 		render.PadLeft("CPU-TIME", cpuW) + " " + render.PadLeft("AVG%", pctW) + " " + render.PadLeft("PEAK", pctW) + " " +
 		render.PadLeft("MEM", memW)
@@ -311,12 +313,20 @@ func (m Model) episodeLines(w int) []string {
 		for i, v := range e.Series {
 			xs[i] = float64(v)
 		}
-		lines = append(lines, kv("", spark(xs, max(w-20, 4), 0, m.look)+m.th.Muted.Render(" cpu over the stretch")))
+		// Stretched: a short stretch has few samples, and they are the
+		// whole story, not the newest end of a longer one.
+		hi := 1.0
+		for _, v := range xs {
+			hi = max(hi, v)
+		}
+		sw := min(max(w-30, 4), 60)
+		line := chart.Sparkline(xs, sw, chart.SparkOpts{Look: m.look, Agg: chart.Max, Min: chart.Fixed(0), Max: chart.Fixed(hi), Stretch: true})
+		lines = append(lines, kv("", line+m.th.Muted.Render(" cpu over the stretch")))
 	}
 	if len(e.Around) > 0 {
-		lines = append(lines, "", m.section("started from a shell just before"))
+		lines = append(lines, "", m.section("commands started from a shell just before"))
 		lines = append(lines, wrap(strings.Join(e.Around, ", "), w, "  ")...)
-		lines = append(lines, m.th.Muted.Render("  (load inside a VM shows on its helper; these commands may be the cause)"))
+		lines = append(lines, wrap(m.th.Muted.Render("  any shell, any session: a lead, not a cause. Load inside a VM (docker under OrbStack) shows on its helper, and the command that started it is usually here."), w, "  ")...)
 	}
 	lines = append(lines, "", m.section("where"))
 	if len(e.Chain) > 0 {

@@ -228,3 +228,35 @@ func TestAroundIsEmptyWhenTheProcessJustStarted(t *testing.T) {
 		t.Fatalf("episodes = %+v", s.out)
 	}
 }
+
+// A sample where ps timed out reports no CPU time for a root daemon; the
+// next good one must not charge its lifetime to the stretch (mDNSResponder
+// 18069% on 2026-10-22). Snapshots are built by hand: the sim keeps its
+// counters consistent, which is exactly what this case is not.
+func TestMissingReadingCostsOneIntervalNotALifetime(t *testing.T) {
+	r := newSim().r
+	at := t0
+	var out []Episode
+	step := func(cpuTime time.Duration, cpu, netIn float64) {
+		at = at.Add(10 * time.Second)
+		d := proc.Proc{PID: 60, PPID: 1, Name: "mDNSResponder", User: "root", Start: t0.Add(-time.Hour),
+			Partial: true, CPUTime: cpuTime, CPU: cpu, NetIn: netIn}
+		out = append(out, r.Step(proc.Snapshot{At: at, Interval: 10 * time.Second,
+			Sys: proc.System{MemTotal: 32 << 30, NCPU: 8}, Procs: []proc.Proc{d}})...)
+	}
+	step(0, 0, 10<<20) // busy by network (kept: 400M); ps timed out: no CPU time
+	for range 3 {
+		step(50*time.Hour, 3, 10<<20) // ps is back with the lifetime counter
+	}
+	for range 4 {
+		step(50*time.Hour, 3, 0)
+	}
+	if len(out) == 0 {
+		t.Fatal("the network stretch was not recorded")
+	}
+	for _, e := range out {
+		if e.CPUSec > 60 {
+			t.Errorf("%s charged %.0f cpu-s over %v", e.Name, e.CPUSec, e.Duration())
+		}
+	}
+}

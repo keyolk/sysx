@@ -346,7 +346,7 @@ func (m Model) liveLabel(action string) (string, bool) {
 	case action == "list.sort":
 		return "sort:" + m.sortBy.String(), true
 	case action == "history.window":
-		return "window:" + history.Dur(histWindows[m.past.window]), true
+		return "window:" + histWindowNames[m.past.window], true
 	case action == "list.filter" && m.query != "":
 		return "filter: " + m.query, true
 	}

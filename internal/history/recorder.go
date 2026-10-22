@@ -47,18 +47,10 @@ func DefaultRules() Rules {
 }
 
 type tracker struct {
-	ep        Episode
-	lastBusy  time.Time
-	baseCPU   time.Duration
-	baseChild time.Duration
-	baseDisk  uint64
-	baseNet   uint64
-	lastCPU   time.Duration
-	lastChild time.Duration
-	lastDisk  uint64
-	lastNet   uint64
-	pids      map[int]bool // groups
-	memTotal  uint64
+	ep       Episode
+	lastBusy time.Time
+	pids     map[int]bool // groups
+	memTotal uint64
 	// kept: an earlier segment of this stretch reached the log, so every
 	// later one does too and the reader can join them.
 	kept bool
@@ -131,7 +123,7 @@ func (r *Recorder) Step(s proc.Snapshot) []Episode {
 			t = r.open(p, s, byPID)
 			r.procs[k] = t
 		}
-		r.observe(t, p, why, now)
+		r.observe(t, p, why, now, secs)
 		if len(why) > 0 {
 			t.lastBusy = now
 		}
@@ -166,11 +158,7 @@ func (r *Recorder) open(p proc.Proc, s proc.Snapshot, byPID map[int]proc.Proc) *
 			Around:  around(p, s, byPID, r.rules.Around),
 			Partial: p.Partial,
 		},
-		baseCPU:   p.CPUTime - time.Duration(p.CPU/100*float64(s.Interval)),
-		baseChild: p.ChildCPUTime - time.Duration(p.ChildCPU/100*float64(s.Interval)),
-		baseDisk:  subU(p.DiskTotal, uint64((p.DiskRead+p.DiskWrite)*s.Interval.Seconds())),
-		baseNet:   subU(p.NetTotal, uint64((p.NetIn+p.NetOut)*s.Interval.Seconds())),
-		memTotal:  s.Sys.MemTotal,
+		memTotal: s.Sys.MemTotal,
 	}
 	if r.args != nil {
 		if a, err := r.args(p.PID); err == nil {
@@ -193,20 +181,19 @@ func (r *Recorder) reopen(t *tracker, now time.Time) *tracker {
 	n.ep.CPUSec, n.ep.ChildCPUSec, n.ep.PeakCPU, n.ep.PeakMem = 0, 0, 0, 0
 	n.ep.DiskBytes, n.ep.NetBytes, n.ep.Series, n.ep.Why, n.ep.Around = 0, 0, nil, nil, nil
 	n.ep.Procs, n.ep.PeakProcs = 0, 0
-	n.baseCPU, n.baseChild, n.baseDisk, n.baseNet = t.lastCPU, t.lastChild, t.lastDisk, t.lastNet
-	n.lastCPU, n.lastChild, n.lastDisk, n.lastNet = t.lastCPU, t.lastChild, t.lastDisk, t.lastNet
 	return n
 }
 
-func (r *Recorder) observe(t *tracker, p proc.Proc, why []string, now time.Time) {
+func (r *Recorder) observe(t *tracker, p proc.Proc, why []string, now time.Time, secs float64) {
 	t.ep.End = now
-	t.lastCPU, t.lastChild, t.lastDisk, t.lastNet = p.CPUTime, p.ChildCPUTime, p.DiskTotal, p.NetTotal
-	// Counters are cumulative, so the cost is exact even across a missed
-	// sample; a counter that went backwards (should not) counts as zero.
-	t.ep.CPUSec = sub(p.CPUTime, t.baseCPU).Seconds()
-	t.ep.ChildCPUSec = sub(p.ChildCPUTime, t.baseChild).Seconds()
-	t.ep.DiskBytes = subU(p.DiskTotal, t.baseDisk)
-	t.ep.NetBytes = subU(p.NetTotal, t.baseNet)
+	// Sums of per-interval rates, not differences of lifetime counters:
+	// the collector only reports a rate it measured between two good
+	// readings, so a sample where ps timed out costs that interval, not
+	// a process's whole life.
+	t.ep.CPUSec += p.CPU / 100 * secs
+	t.ep.ChildCPUSec += p.ChildCPU / 100 * secs
+	t.ep.DiskBytes += uint64((p.DiskRead + p.DiskWrite) * secs)
+	t.ep.NetBytes += uint64((p.NetIn + p.NetOut) * secs)
 	cpu := p.CPU + p.ChildCPU
 	t.ep.PeakCPU = max(t.ep.PeakCPU, cpu)
 	t.ep.PeakMem = max(t.ep.PeakMem, p.Footprint)
@@ -216,20 +203,6 @@ func (r *Recorder) observe(t *tracker, p proc.Proc, why []string, now time.Time)
 			t.ep.Why = append(t.ep.Why, w)
 		}
 	}
-}
-
-func sub(a, b time.Duration) time.Duration {
-	if a < b {
-		return 0
-	}
-	return a - b
-}
-
-func subU(a, b uint64) uint64 {
-	if a < b {
-		return 0
-	}
-	return a - b
 }
 
 // finish appends the tracker's episode when it is worth keeping. A cut

@@ -37,3 +37,51 @@ func TestChildCPUIsCreditedAfterReapInNanoseconds(t *testing.T) {
 		t.Errorf("rusage own cpu %v vs task info %v: units disagree", own, task)
 	}
 }
+
+// A child the collector already sampled must not be charged again to its
+// parent when the parent reaps it: what a sample saw is the child's.
+func TestReapedChildSeenAliveIsNotChargedTwice(t *testing.T) {
+	c := NewCollector()
+	cmd := exec.Command("/bin/sh", "-c", `i=0; while [ $i -lt 600000 ]; do i=$((i+1)); done`)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Sample(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(500 * time.Millisecond)
+	s2, err := c.Sample(t.Context()) // sees the child busy
+	if err != nil {
+		t.Fatal(err)
+	}
+	var seen time.Duration
+	for _, p := range s2.Procs {
+		if p.PID == cmd.Process.Pid {
+			seen = p.CPUTime
+		}
+	}
+	if seen < 100*time.Millisecond {
+		t.Skipf("child barely ran before the sample (%v); nothing to subtract", seen)
+	}
+	if err := cmd.Wait(); err != nil {
+		t.Fatal(err)
+	}
+	life := cmd.ProcessState.UserTime() + cmd.ProcessState.SystemTime()
+	s3, err := c.Sample(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range s3.Procs {
+		if p.PID != os.Getpid() {
+			continue
+		}
+		charged := time.Duration(p.ChildCPU / 100 * float64(s3.Interval))
+		// Unseen is life - seen; the sampler's own nettop and ps are
+		// children of this process too, so allow some slack for them.
+		if charged > life-seen+700*time.Millisecond {
+			t.Errorf("charged %v of child CPU; child life %v, already seen %v", charged, life, seen)
+		}
+		return
+	}
+	t.Fatal("own process missing")
+}

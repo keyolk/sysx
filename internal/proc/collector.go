@@ -14,6 +14,7 @@ type counters struct {
 	// gets it from ps; when ps fails or times out it has none, and a rate
 	// against a zero would charge its whole lifetime to one interval.
 	hasCPU  bool
+	ppid    int
 	cpuNs   uint64
 	childNs uint64
 	diskR   uint64
@@ -21,6 +22,7 @@ type counters struct {
 	netIn   uint64
 	netOut  uint64
 	hasDisk bool
+	hasNet  bool // nettop reported it; nettop failing must not read as zero
 }
 
 // Collector samples the machine. It is not safe for concurrent use: one
@@ -113,6 +115,7 @@ func (c *Collector) Sample(ctx context.Context) (Snapshot, error) {
 		if p.Footprint == 0 {
 			p.Footprint = p.RSS
 		}
+		cn.ppid = p.PPID
 		procs = append(procs, p)
 		next[p.Key()] = cn
 	}
@@ -140,11 +143,20 @@ func (c *Collector) Sample(ctx context.Context) (Snapshot, error) {
 			c.nettop = false
 		}
 	}
+	// What the last sample saw of processes now gone, by their parent: a
+	// parent's child CPU grows by exactly that much when it reaps them.
+	reaped := map[int]uint64{}
+	for k, old := range c.prev {
+		if _, alive := next[k]; !alive && old.hasCPU {
+			reaped[old.ppid] += old.cpuNs + old.childNs
+		}
+	}
 	for i := range procs {
 		p := &procs[i]
 		cn := next[p.Key()]
 		if nb, ok := net[p.PID]; ok {
 			cn.netIn, cn.netOut = nb.in, nb.out
+			cn.hasNet = true
 			p.NetTotal = nb.in + nb.out
 			next[p.Key()] = cn
 		}
@@ -155,12 +167,18 @@ func (c *Collector) Sample(ctx context.Context) (Snapshot, error) {
 		if cn.hasCPU && old.hasCPU {
 			p.CPU = rate(cn.cpuNs, old.cpuNs, secs) / 1e9 * 100
 		}
-		if cn.hasDisk && old.hasDisk {
-			p.ChildCPU = rate(cn.childNs, old.childNs, secs) / 1e9 * 100
+		if cn.hasDisk && old.hasDisk && cn.childNs > old.childNs {
+			// A reaped child hands its whole life to the parent at once.
+			// What an earlier sample already saw of it is counted on the
+			// child; only the unseen rest (children that lived and died
+			// between two samples) is the parent's.
+			unseen := cn.childNs - old.childNs
+			unseen -= min(unseen, reaped[p.PID])
+			p.ChildCPU = float64(unseen) / secs / 1e9 * 100
 		}
 		// More than every core for the whole interval cannot happen; a
 		// counter read wrong (or a pid table race) produced it.
-		if ceiling := float64(c.ncpu) * 100 * 1.05; p.CPU > ceiling || p.ChildCPU > ceiling*4 {
+		if ceiling := float64(c.ncpu) * 100 * 1.05; p.CPU > ceiling || p.ChildCPU > ceiling {
 			snap.Warnings = append(snap.Warnings, fmt.Sprintf("pid %d %s: impossible CPU %.0f%% (children %.0f%%) dropped", p.PID, p.Name, p.CPU, p.ChildCPU))
 			p.CPU, p.ChildCPU = 0, 0
 		}
@@ -168,8 +186,10 @@ func (c *Collector) Sample(ctx context.Context) (Snapshot, error) {
 			p.DiskRead = rate(cn.diskR, old.diskR, secs)
 			p.DiskWrite = rate(cn.diskW, old.diskW, secs)
 		}
-		p.NetIn = rate(cn.netIn, old.netIn, secs)
-		p.NetOut = rate(cn.netOut, old.netOut, secs)
+		if cn.hasNet && old.hasNet {
+			p.NetIn = rate(cn.netIn, old.netIn, secs)
+			p.NetOut = rate(cn.netOut, old.netOut, secs)
+		}
 		snap.Sys.DiskRead += p.DiskRead
 		snap.Sys.DiskWrite += p.DiskWrite
 		snap.Sys.NetIn += p.NetIn
